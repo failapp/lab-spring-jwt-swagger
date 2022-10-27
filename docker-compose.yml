@@ -1,0 +1,26 @@
+version: '3.3'
+
+services:
+  lab:
+    container_name: lab
+    image: losheroes/lab:1.0
+    restart: unless-stopped
+    ports:
+      - 4101:4101
+    environment:
+      - HTTP_PORT=4101
+      - DB_HOST=mongodb
+      - DB_PORT=27017
+      - DB_NAME=losheroes
+      - TZ=America/Santiago
+    depends_on:
+      - mongodb
+
+  mongodb:
+    container_name: mongodb
+    image: mongo:bionic
+    restart: unless-stopped
+    volumes:
+      - ./data:/data/db
+    ports:
+      - 27017:27017
