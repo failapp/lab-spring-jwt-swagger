@@ -1,15 +1,23 @@
 package cl.losheroes.lab.service;
 
+import cl.losheroes.lab.exception.BusinessException;
+import cl.losheroes.lab.exception.RequestException;
 import cl.losheroes.lab.persistence.dto.CustomerDto;
 import cl.losheroes.lab.persistence.entity.Customer;
 import cl.losheroes.lab.persistence.repository.CustomerRepository;
+import cl.losheroes.lab.shared.dto.ItemsDto;
 import lombok.extern.slf4j.Slf4j;
 import org.modelmapper.ModelMapper;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpStatus;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 
 @Slf4j
 @Service
@@ -21,100 +29,139 @@ public class CustomerService {
     @Autowired
     private ModelMapper modelMapper;
 
-    public Optional<CustomerDto> addCustomer(CustomerDto customerDto) {
-
-        Customer customer = modelMapper.map(customerDto, Customer.class);
-
-        if ( Optional.ofNullable( customer.getId() ).isPresent() ) {
-            String customerId = customer.getId();
-            this.editCustomer(customerDto, customerId);
-        } else {
-
-            Optional<Customer> customerEntity = this.validateCustomer(customer, false);
-            if (customerEntity.isEmpty()) return Optional.empty();
-
-            log.info("[x] add customer: {}", customerEntity.get());
-            customer = customerRepository.save(customerEntity.get());
-        }
-
-        return Optional.of(modelMapper.map(customer, CustomerDto.class));
-
+    public CustomerDto addCustomer(CustomerDto customerDto) {
+        Customer customer = this.validateCustomer(customerDto, false);
+        customer = customerRepository.save(customer);
+        log.info("[x] add customer: {}", customer);
+        return modelMapper.map(customer, CustomerDto.class);
     }
 
-    public Optional<CustomerDto> editCustomer(CustomerDto customerDto, String customerId) {
-
-        if (Optional.ofNullable(customerId).isEmpty()) return Optional.empty();
-
-        Customer customer = modelMapper.map(customerDto, Customer.class);
-        customer.setId(customerId);
-        Optional<Customer> customerEntity = this.validateCustomer(customer, true);
-        if (customerEntity.isEmpty()) return Optional.empty();
-
-        log.info("[x] update customer: {}, customerId: {}", customerEntity.get());
-        customer = customerRepository.save(customerEntity.get());
-        return Optional.of(modelMapper.map(customer, CustomerDto.class));
+    public CustomerDto editCustomer(CustomerDto customerDto) {
+        Customer customer = this.validateCustomer(customerDto, true);
+        customer = customerRepository.save(customer);
+        log.info("[x] update customer: {}", customer);
+        return modelMapper.map(customer, CustomerDto.class);
     }
 
-    public boolean deleteCustomer(String documentId) {
-
+    public void deleteCustomer(String documentId) {
         Optional<Customer> customer = customerRepository.findOneByDocumentId(documentId);
         if (customer.isPresent()) {
             log.info("[x] delete customer, documentId: {}", documentId);
             customerRepository.delete(customer.get());
-            return true;
+        } else {
+            throw new BusinessException(HttpStatus.NOT_FOUND, "customer not found, documentId:" + documentId);
         }
-
-        log.warn("[x] customer not found, documentId: {}", documentId);
-        return false;
     }
 
-    public List<Customer> getAllCustomers() {
+    public ItemsDto<CustomerDto> getAllCustomers(Integer page, Integer itemsPerPage) {
 
-        return customerRepository.findAll();
+        page = (Objects.isNull(page) || page < 0) ? 0 : page-1;
+        itemsPerPage = (Objects.isNull(itemsPerPage) || itemsPerPage < 0) ? 5 : itemsPerPage;
+        //log.info("[x] page: {}, itemsPerPage: {}", page, itemsPerPage);
+
+        Pageable pageable = PageRequest.of(page, itemsPerPage, Sort.by("firstName"));
+        Page<Customer> customersPage = customerRepository.findAll(pageable);
+
+        List<CustomerDto> dtoList = customersPage.getContent().stream()
+                .map( customer -> {
+                    return modelMapper.map(customer, CustomerDto.class);
+                }).toList();
+
+        ItemsDto<CustomerDto> itemsDto = new ItemsDto<>();
+        itemsDto.setItems(dtoList);
+        itemsDto.setPage(page+1);
+        itemsDto.setItemsPerPage(itemsPerPage);
+        itemsDto.setTotalItems(customersPage.getTotalElements());
+        itemsDto.setTotalPages(customersPage.getTotalPages());
+
+        return itemsDto;
     }
 
-    public Optional<Customer> getCustomer(String documentId) {
-        if ( Optional.ofNullable(documentId).isEmpty() ) return Optional.empty();
-        return customerRepository.findOneByDocumentId(documentId);
+
+    public CustomerDto getCustomer(String documentId) {
+
+        Optional<Customer> customer = customerRepository.findOneByDocumentId(documentId.trim().toUpperCase());
+        if (customer.isEmpty())
+            throw new BusinessException(HttpStatus.NOT_FOUND, "customer not found");
+
+        return modelMapper.map(customer.get(), CustomerDto.class);
+
     }
 
 
-    private Optional<Customer> validateCustomer(Customer customer, boolean update) {
+    private Customer validateCustomer(CustomerDto customerDto, boolean update) {
+
+        Customer customer = modelMapper.map(customerDto, Customer.class);
+        String documentId = customer.getDocumentId().trim().toUpperCase();
+        String email = customer.getEmail().trim().toLowerCase();
 
         if (update) {
 
-            Optional<Customer> _customer = customerRepository.findOneByDocumentId(customer.getDocumentId());
-            if (_customer.isPresent() && !_customer.get().getId().equals(customer.getId()) ) {
-                log.error("[x] duplicate documentId: {}", customer.getDocumentId());
-                return Optional.empty();
+            if (Objects.isNull(customerDto.getId()))
+                throw new RequestException("id is mandatory");
+            if (customerDto.getId().isEmpty())
+                throw new RequestException("id can not be blank");
+
+            String customerId = customer.getId();
+            Optional<Customer> _customer = customerRepository.findOneByDocumentId(documentId);
+
+            if (_customer.isPresent() && !_customer.get().getId().equals(customerId)) {
+                String msg = "documentId: " + customerId + " duplicate";
+                log.error("[x] {}", msg);
+                throw new BusinessException(HttpStatus.CONFLICT, msg);
             }
 
-            _customer = customerRepository.findOneByEmail( customer.getEmail() );
-            if (_customer.isPresent() && !_customer.get().getId().equals(customer.getId()) ) {
-                log.error("[x] duplicate email: {}", customer.getEmail());
-                return Optional.empty();
+            _customer = customerRepository.findOneByEmail(email);
+            if (_customer.isPresent() && !_customer.get().getId().equals(customerId)) {
+                String msg = "email: " + email + " duplicate";
+                log.error("[x] {}", msg);
+                throw new BusinessException(HttpStatus.CONFLICT, msg);
             }
 
         } else {
-            boolean duplicateEmail = customerRepository.existsByEmail(customer.getEmail());
-            if (duplicateEmail) {
-                log.error("[x] duplicate email: {}", customer.getEmail());
-                return Optional.empty();
-            }
 
-            boolean duplicateDocumentId = customerRepository.existsByDocumentId(customer.getDocumentId());
+            if (!Objects.isNull(customerDto.getId()))
+                throw new RequestException("use update method (PUT) for resources with Id");
+
+            boolean duplicateDocumentId = customerRepository.existsByDocumentId(documentId);
             if (duplicateDocumentId) {
-                log.error("[x] duplicate documentId: {}", customer.getDocumentId());
-                return Optional.empty();
+                String msg = "documentId "+ documentId + " already exists";
+                log.error("[x] {}", msg);
+                throw new BusinessException(HttpStatus.CONFLICT, msg);
+            }
+
+            boolean duplicateEmail = customerRepository.existsByEmail(email);
+            if (duplicateEmail) {
+                String msg = "email "+ email + " already exists";
+                log.error("[x] {}", msg);
+                throw new BusinessException(HttpStatus.CONFLICT, msg);
             }
         }
 
+        //verify and format documentId (rut), email and state (region)
+        customer.setDocumentId(documentId);
+        customer.setEmail(email);
+        customer.getAddresses().forEach( address -> {
+            if ( Objects.isNull(address.getState())) {
+                address.setState("");
+            }
+        });
+        return customer;
 
-        if (Optional.ofNullable(customer.getPhoneNumber()).isEmpty() ) {
-            customer.setPhoneNumber("");
-        }
-
-        return Optional.of(customer);
     }
+
+    @Async
+    public void saveBulkData(List<CustomerDto> customerDtoList) {
+
+        customerDtoList.forEach( customerDto -> {
+
+            try {
+                this.addCustomer(customerDto);
+            } catch (Exception ex) {
+                log.error("[x] save bulk data error: {}", ex.getMessage());
+            }
+        });
+    }
+
 
 }

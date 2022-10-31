@@ -3,6 +3,8 @@ package cl.losheroes.lab.context;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import org.springframework.http.ResponseEntity;
+import springfox.documentation.builders.PathSelectors;
 import springfox.documentation.service.SecurityReference;
 import springfox.documentation.spi.service.contexts.SecurityContext;
 
@@ -15,6 +17,7 @@ import springfox.documentation.spring.web.plugins.Docket;
 
 import springfox.documentation.service.*;
 
+import java.time.LocalDate;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -24,18 +27,26 @@ public class SwaggerConfig {
 
     @Bean
     public Docket api() {
-        return new Docket(DocumentationType.SWAGGER_2).apiInfo(apiInfo())
-                .securityContexts(Arrays.asList(securityContext()))
-                .securitySchemes(Arrays.asList(apiKey()))
+
+        return new Docket(DocumentationType.SWAGGER_2)
                 .select()
+                .paths(PathSelectors.any())
                 .apis(RequestHandlerSelectors.basePackage("cl.losheroes.lab.resource"))
-                .build();
+                .build()
+                .securitySchemes(Arrays.asList(apiKey()))
+                .securityContexts(Arrays.asList(securityContext()))
+                .apiInfo(apiInfo())
+                .pathMapping("/")
+                .useDefaultResponseMessages(false)
+                .directModelSubstitute(LocalDate.class, String.class)
+                .genericModelSubstitutes(ResponseEntity.class);
     }
+
 
     private ApiInfo apiInfo() {
         return new ApiInfo(
                 "Customers API",
-                "API REST de Customers-API.",
+                "API REST de Customers-API. Importante: Debe agregar prefijo 'Bearer ' en token de autenticacion (Ej: 'Bearer eyJhbGciOiJI..') ",
                 "v1",
                 "Terms of service",
                 new Contact("FailApp Dev", "https://failapp.dev", "jrodriguez@aol.cl"),
